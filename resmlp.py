@@ -30,7 +30,7 @@ class FeedForward(nn.Module):
 
 class MLPblock(nn.Module):
 
-    def __init__(self, dim, num_patch, mlp_dim, dropout = 0.):
+    def __init__(self, dim, num_patch, mlp_dim, dropout = 0., init_values=1e-4):
         super().__init__()
 
         self.pre_affine = Aff(dim)
@@ -38,19 +38,19 @@ class MLPblock(nn.Module):
             Rearrange('b n d -> b d n'),
             nn.Linear(num_patch, num_patch),
             Rearrange('b d n -> b n d'),
-            Aff(dim)
         )
         self.ff = nn.Sequential(
             FeedForward(dim, mlp_dim, dropout),
-            Aff(dim)
         )
         self.post_affine = Aff(dim)
+        self.gamma_1 = nn.Parameter(init_values * torch.ones((dim)), requires_grad=True)
+        self.gamma_2 = nn.Parameter(init_values * torch.ones((dim)), requires_grad=True)
 
     def forward(self, x):
         x = self.pre_affine(x)
-        x = x + self.token_mix(x)
+        x = x + self.gamma_1 * self.token_mix(x)
         x = self.post_affine(x)
-        x = x + self.ff(x)
+        x = x + self.gamma_2 * self.ff(x)
         return x
 
 
@@ -71,7 +71,7 @@ class ResMLP(nn.Module):
         for _ in range(depth):
             self.mlp_blocks.append(MLPblock(dim, self.num_patch, mlp_dim))
 
-
+        self.affine = Aff(dim)
 
         self.mlp_head = nn.Sequential(
             nn.Linear(dim, num_classes)
@@ -79,11 +79,12 @@ class ResMLP(nn.Module):
 
     def forward(self, x):
 
-
         x = self.to_patch_embedding(x)
 
         for mlp_block in self.mlp_blocks:
             x = mlp_block(x)
+
+        x = self.affine(x)
 
         x = x.mean(dim=1)
 
@@ -96,7 +97,7 @@ if __name__ == "__main__":
     img = torch.ones([1, 3, 224, 224])
 
     model = ResMLP(in_channels=3, image_size=224, patch_size=16, num_classes=1000,
-                     dim=512, depth=8, mlp_dim=2048)
+                     dim=384, depth=12, mlp_dim=384*4)
 
     parameters = filter(lambda p: p.requires_grad, model.parameters())
     parameters = sum([np.prod(p.size()) for p in parameters]) / 1_000_000
